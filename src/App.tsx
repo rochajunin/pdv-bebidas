@@ -9,7 +9,7 @@ interface Produto {
   preco: number
   preco_custo: number
   categoria: string
-  estoque: number // NOVO CAMPO
+  estoque: number
 }
 
 interface ItemCarrinho {
@@ -50,7 +50,7 @@ export default function App() {
   const [precoForm, setPrecoForm] = useState("")
   const [precoCustoForm, setPrecoCustoForm] = useState("")
   const [categoriaForm, setCategoriaForm] = useState("")
-  const [estoqueForm, setEstoqueForm] = useState("") // NOVO ESTADO
+  const [estoqueForm, setEstoqueForm] = useState("")
   const [salvandoForm, setSalvandoForm] = useState(false)
   const [idEditando, setIdEditando] = useState<number | null>(null)
 
@@ -219,7 +219,6 @@ export default function App() {
   const clientesFiltrados = clientes.filter(cliente => cliente.nome.toLowerCase().includes(nomeClientePDV.toLowerCase()))
 
   const adicionarAoCarrinho = (produto: Produto) => {
-    // 1. Bloqueia se o estoque for 0 no clique da busca
     if (produto.estoque <= 0) {
       alert(`Produto esgotado! ${produto.nome} está sem estoque.`);
       return;
@@ -228,7 +227,6 @@ export default function App() {
     setCarrinho(prev => {
       const itemExistente = prev.find(item => item.produto.id === produto.id)
       if (itemExistente) {
-        // 2. Bloqueia se tentar adicionar mais do que tem no estoque
         if (Number(itemExistente.quantidade) + 1 > produto.estoque) {
           alert(`Estoque insuficiente! Temos apenas ${produto.estoque} unidades de ${produto.nome}.`);
           return prev;
@@ -249,7 +247,6 @@ export default function App() {
         const qtdNumerica = Number(novaQuantidade)
         if (qtdNumerica < 0 || isNaN(qtdNumerica)) return item
         
-        // 3. Bloqueia no input manual ou botão +
         if (qtdNumerica > item.produto.estoque) {
            alert(`Estoque máximo atingido: ${item.produto.estoque} unidades.`);
            return { ...item, quantidade: item.produto.estoque }
@@ -298,16 +295,25 @@ export default function App() {
       const { error: itensError } = await supabase.from('Itens_Venda').insert(itensParaSalvar)
       if (itensError) throw itensError
 
-      // 4. DESCONTA O ESTOQUE APÓS A VENDA
+      // 4. DESCONTA O ESTOQUE E VERIFICA ERROS SILENCIOSOS
       for (const item of carrinho) {
-        const novoEstoque = item.produto.estoque - Number(item.quantidade);
-        await supabase.from('Produtos').update({ estoque: novoEstoque }).eq('id', item.produto.id);
+        const novoEstoque = (item.produto.estoque || 0) - Number(item.quantidade);
+        const { data: checkData, error: erroEstoque } = await supabase.from('Produtos')
+          .update({ estoque: novoEstoque })
+          .eq('id', item.produto.id)
+          .select();
+
+        if (erroEstoque) {
+          alert(`ERRO DO BANCO: Falha ao baixar o estoque de ${item.produto.nome}. Mensagem: ${erroEstoque.message}`);
+        } else if (!checkData || checkData.length === 0) {
+          alert(`ALERTA DE RLS: O estoque de ${item.produto.nome} não foi atualizado! O Supabase bloqueou a edição porque falta uma regra (Policy) de UPDATE na tabela Produtos.`);
+        }
       }
 
-      // Atualiza o estoque localmente sem recarregar tudo
+      // Atualiza o estoque localmente
       setProdutos(prev => prev.map(p => {
         const itemVendido = carrinho.find(c => c.produto.id === p.id);
-        if (itemVendido) return { ...p, estoque: p.estoque - Number(itemVendido.quantidade) };
+        if (itemVendido) return { ...p, estoque: (p.estoque || 0) - Number(itemVendido.quantidade) };
         return p;
       }))
 
@@ -323,23 +329,34 @@ export default function App() {
     }
   }
 
-  /* --- LÓGICA DO ESTOQUE (COM CADASTRO DE QUANTIDADE) --- */
+  /* --- LÓGICA DO ESTOQUE --- */
   const salvarProduto = async (e: React.FormEvent) => {
     e.preventDefault()
     if (userRole !== "gerente") return
     setSalvandoForm(true)
     const precoNumerico = parseFloat(precoForm.toString().replace(',', '.'))
     const precoCustoNumerico = precoCustoForm ? parseFloat(precoCustoForm.toString().replace(',', '.')) : 0
-    const estoqueNumerico = parseInt(estoqueForm) || 0 // Pega o estoque novo
+    const estoqueNumerico = parseInt(estoqueForm) || 0
     
     const payload = { nome: nomeForm, preco: precoNumerico, preco_custo: precoCustoNumerico, categoria: categoriaForm, estoque: estoqueNumerico }
 
     if (idEditando) {
-      const { data } = await supabase.from('Produtos').update(payload).eq('id', idEditando).select()
-      if (data) setProdutos(prev => prev.map(p => p.id === idEditando ? data[0] : p).sort((a, b) => a.nome.localeCompare(b.nome)))
+      const { data, error } = await supabase.from('Produtos').update(payload).eq('id', idEditando).select()
+      
+      if (error) {
+        alert(`Erro ao salvar no banco: ${error.message}`)
+      } else if (!data || data.length === 0) {
+         alert("O banco bloqueou a edição! Verifique se a tabela Produtos tem uma política de RLS (Row Level Security) que permite a ação de UPDATE.")
+      } else {
+        setProdutos(prev => prev.map(p => p.id === idEditando ? data[0] : p).sort((a, b) => a.nome.localeCompare(b.nome)))
+      }
     } else {
-      const { data } = await supabase.from('Produtos').insert([payload]).select()
-      if (data) setProdutos(prev => [...prev, data[0]].sort((a, b) => a.nome.localeCompare(b.nome)))
+      const { data, error } = await supabase.from('Produtos').insert([payload]).select()
+      if (error) {
+        alert(`Erro ao criar no banco: ${error.message}`)
+      } else if (data) {
+        setProdutos(prev => [...prev, data[0]].sort((a, b) => a.nome.localeCompare(b.nome)))
+      }
     }
     setSalvandoForm(false)
     cancelarEdicao()
@@ -411,7 +428,6 @@ export default function App() {
                           <div className="flex flex-col flex-1 min-w-0 pr-2 text-left">
                             <span className="font-semibold text-slate-800 dark:text-slate-100 break-words">{produto.nome}</span>
                             <span className="text-[10px] text-slate-400 dark:text-slate-500 flex items-center gap-2 mt-0.5">
-                                {/* ALERTA DE ESTOQUE NO PDV */}
                                 <span className={`font-bold ${produto.estoque <= 30 ? 'text-red-500' : 'text-emerald-500'}`}>Estoque: {produto.estoque} {produto.estoque <= 30 && '⚠️'}</span>
                                 • {produto.categoria}
                             </span>
@@ -509,7 +525,6 @@ export default function App() {
                     )}
                   </div>
                   <div>
-                     {/* NOVO: CAMPO DE ESTOQUE NO FORMULÁRIO */}
                     <label className="block text-sm font-bold text-orange-600 dark:text-orange-500 mb-1">Estoque Atual</label>
                     <Input type="number" placeholder="0" value={estoqueForm} onChange={(e) => setEstoqueForm(e.target.value)} className="h-12 font-bold bg-orange-50 dark:bg-orange-950/20 border-orange-200 dark:border-orange-900/50 dark:text-white focus-visible:ring-orange-500" required />
                   </div>
@@ -543,7 +558,6 @@ export default function App() {
                       <div className="flex flex-col flex-1 min-w-0 pr-2">
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-slate-800 dark:text-slate-200 break-words">{produto.nome}</span>
-                          {/* BADGE DE ALERTA NO CADASTRO DE ESTOQUE */}
                           <span className={`text-[10px] px-2 py-0.5 rounded font-black uppercase tracking-wider ${produto.estoque <= 30 ? 'bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400' : 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400'}`}>
                             {produto.estoque} UN {produto.estoque <= 30 && '⚠️'}
                           </span>
