@@ -2,6 +2,7 @@ import { useState, useEffect } from "react"
 import { supabase } from "@/lib/supabase"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { X } from "lucide-react"
 
 interface Produto {
   id: number
@@ -10,6 +11,7 @@ interface Produto {
   preco_custo: number
   categoria: string
   estoque: number
+  estoque_minimo: number
 }
 
 interface ItemCarrinho {
@@ -29,7 +31,7 @@ export default function App() {
   const [senhaLogin, setSenhaLogin] = useState("")
   const [carregandoLogin, setCarregandoLogin] = useState(false)
 
-  const [abaAtual, setAbaAtual] = useState<"pdv" | "estoque" | "painel">("pdv")
+  const [abaAtual, setAbaAtual] = useState<"pdv" | "estoque" | "painel" | "perfil">("pdv")
 
   const [temaEscuro, setTemaEscuro] = useState(() => {
     if (typeof window !== "undefined") return localStorage.getItem("tema") === "escuro"
@@ -51,6 +53,7 @@ export default function App() {
   const [precoCustoForm, setPrecoCustoForm] = useState("")
   const [categoriaForm, setCategoriaForm] = useState("")
   const [estoqueForm, setEstoqueForm] = useState("")
+  const [estoqueMinimoForm, setEstoqueMinimoForm] = useState("")
   const [salvandoForm, setSalvandoForm] = useState(false)
   const [idEditando, setIdEditando] = useState<number | null>(null)
 
@@ -58,9 +61,27 @@ export default function App() {
   const [nomeClientePDV, setNomeClientePDV] = useState("")
   const [salvandoVenda, setSalvandoVenda] = useState(false)
 
-  // Estados do Modal
+  // Estados do Modal Original (Venda)
   const [vendaSucesso, setVendaSucesso] = useState(false)
   const [totalVendaSucesso, setTotalVendaSucesso] = useState(0)
+
+  // NOVO: SISTEMA DE ALERTAS PERSONALIZADOS
+  const [alerta, setAlerta] = useState<{
+    visivel: boolean;
+    titulo: string;
+    mensagem: string;
+    tipo: 'erro' | 'aviso' | 'sucesso';
+    isConfirm?: boolean;
+    onConfirm?: () => void;
+  } | null>(null)
+
+  const mostrarAlerta = (titulo: string, mensagem: string, tipo: 'erro' | 'aviso' | 'sucesso' = 'aviso') => {
+    setAlerta({ visivel: true, titulo, mensagem, tipo, isConfirm: false });
+  }
+
+  const mostrarConfirmacao = (titulo: string, mensagem: string, onConfirm: () => void) => {
+    setAlerta({ visivel: true, titulo, mensagem, tipo: 'aviso', isConfirm: true, onConfirm });
+  }
 
   // ESTADOS DO PAINEL DE RELATÓRIOS
   const [filtroData, setFiltroData] = useState<"hoje" | "7dias" | "mes" | "personalizado">("hoje")
@@ -209,7 +230,11 @@ export default function App() {
       setCarregandoLogin(true)
       const { error } = await supabase.auth.signInWithPassword({ email: emailLogin, password: senhaLogin })
       if (error) throw error
-    } catch (error: any) { alert("Erro no login: Verifique as credenciais.") } finally { setCarregandoLogin(false) }
+    } catch (error: any) { 
+      mostrarAlerta("Erro de Autenticação", "Não foi possível fazer o login. Verifique seu e-mail e senha e tente novamente.", "erro");
+    } finally { 
+      setCarregandoLogin(false) 
+    }
   }
 
   const lidarComLogout = async () => { await supabase.auth.signOut(); setCarrinho([]); setAbaAtual("pdv") }
@@ -220,7 +245,7 @@ export default function App() {
 
   const adicionarAoCarrinho = (produto: Produto) => {
     if (produto.estoque <= 0) {
-      alert(`Produto esgotado! ${produto.nome} está sem estoque.`);
+      mostrarAlerta("Produto Esgotado", `O item "${produto.nome}" está sem estoque no momento e não pode ser vendido.`, "erro");
       return;
     }
 
@@ -228,7 +253,7 @@ export default function App() {
       const itemExistente = prev.find(item => item.produto.id === produto.id)
       if (itemExistente) {
         if (Number(itemExistente.quantidade) + 1 > produto.estoque) {
-          alert(`Estoque insuficiente! Temos apenas ${produto.estoque} unidades de ${produto.nome}.`);
+          mostrarAlerta("Estoque Insuficiente", `Temos apenas ${produto.estoque} unidades de "${produto.nome}" disponíveis.`, "aviso");
           return prev;
         }
         return prev.map(item => item.produto.id === produto.id ? { ...item, quantidade: Number(item.quantidade) + 1 } : item)
@@ -248,7 +273,7 @@ export default function App() {
         if (qtdNumerica < 0 || isNaN(qtdNumerica)) return item
         
         if (qtdNumerica > item.produto.estoque) {
-           alert(`Estoque máximo atingido: ${item.produto.estoque} unidades.`);
+           mostrarAlerta("Limite Atingido", `Você não pode adicionar mais do que o estoque disponível (${item.produto.estoque} unidades).`, "aviso");
            return { ...item, quantidade: item.produto.estoque }
         }
         
@@ -304,9 +329,9 @@ export default function App() {
           .select();
 
         if (erroEstoque) {
-          alert(`ERRO DO BANCO: Falha ao baixar o estoque de ${item.produto.nome}. Mensagem: ${erroEstoque.message}`);
+          mostrarAlerta("Erro de Banco de Dados", `Falha ao dar baixa no estoque do produto ${item.produto.nome}.\n\nDetalhe: ${erroEstoque.message}`, "erro");
         } else if (!checkData || checkData.length === 0) {
-          alert(`ALERTA DE RLS: O estoque de ${item.produto.nome} não foi atualizado! O Supabase bloqueou a edição porque falta uma regra (Policy) de UPDATE na tabela Produtos.`);
+          mostrarAlerta("Acesso Negado (RLS)", `O estoque de ${item.produto.nome} não pôde ser atualizado. O Supabase bloqueou a edição por falta de permissões (Policy) de UPDATE.`, "erro");
         }
       }
 
@@ -323,7 +348,7 @@ export default function App() {
       setNomeClientePDV("")
     } catch (error) {
       console.error(error)
-      alert("Ocorreu um erro ao registrar a venda.")
+      mostrarAlerta("Falha na Venda", "Ocorreu um erro inesperado ao tentar registrar esta venda. Tente novamente.", "erro");
     } finally {
       setSalvandoVenda(false)
     }
@@ -337,23 +362,31 @@ export default function App() {
     const precoNumerico = parseFloat(precoForm.toString().replace(',', '.'))
     const precoCustoNumerico = precoCustoForm ? parseFloat(precoCustoForm.toString().replace(',', '.')) : 0
     const estoqueNumerico = parseInt(estoqueForm) || 0
+    const estoqueMinimoNumerico = parseInt(estoqueMinimoForm) || 0
     
-    const payload = { nome: nomeForm, preco: precoNumerico, preco_custo: precoCustoNumerico, categoria: categoriaForm, estoque: estoqueNumerico }
+    const payload = { 
+      nome: nomeForm, 
+      preco: precoNumerico, 
+      preco_custo: precoCustoNumerico, 
+      categoria: categoriaForm, 
+      estoque: estoqueNumerico,
+      estoque_minimo: estoqueMinimoNumerico
+    }
 
     if (idEditando) {
       const { data, error } = await supabase.from('Produtos').update(payload).eq('id', idEditando).select()
       
       if (error) {
-        alert(`Erro ao salvar no banco: ${error.message}`)
+        mostrarAlerta("Erro ao Salvar", error.message, "erro");
       } else if (!data || data.length === 0) {
-         alert("O banco bloqueou a edição! Verifique se a tabela Produtos tem uma política de RLS (Row Level Security) que permite a ação de UPDATE.")
+         mostrarAlerta("Edição Bloqueada", "O banco impediu a alteração. Verifique se a tabela Produtos tem uma política de RLS permitindo a ação de UPDATE.", "erro");
       } else {
         setProdutos(prev => prev.map(p => p.id === idEditando ? data[0] : p).sort((a, b) => a.nome.localeCompare(b.nome)))
       }
     } else {
       const { data, error } = await supabase.from('Produtos').insert([payload]).select()
       if (error) {
-        alert(`Erro ao criar no banco: ${error.message}`)
+        mostrarAlerta("Erro ao Cadastrar", error.message, "erro");
       } else if (data) {
         setProdutos(prev => [...prev, data[0]].sort((a, b) => a.nome.localeCompare(b.nome)))
       }
@@ -365,14 +398,32 @@ export default function App() {
   const iniciarEdicao = (produto: Produto) => {
     setIdEditando(produto.id); setNomeForm(produto.nome); setPrecoForm(produto.preco.toString());
     setPrecoCustoForm(produto.preco_custo ? produto.preco_custo.toString() : "0"); setCategoriaForm(produto.categoria);
-    setEstoqueForm(produto.estoque ? produto.estoque.toString() : "0")
+    setEstoqueForm(produto.estoque ? produto.estoque.toString() : "0");
+    setEstoqueMinimoForm(produto.estoque_minimo !== undefined && produto.estoque_minimo !== null ? produto.estoque_minimo.toString() : "10");
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
-  const cancelarEdicao = () => { setIdEditando(null); setNomeForm(""); setPrecoForm(""); setPrecoCustoForm(""); setCategoriaForm(""); setEstoqueForm(""); }
-  const excluirProduto = async (id: number, nome: string) => {
-    if (userRole !== "gerente" || !window.confirm(`Excluir "${nome}"?`)) return
-    const { error } = await supabase.from('Produtos').delete().eq('id', id)
-    if (!error) setProdutos(prev => prev.filter(p => p.id !== id))
+
+  const cancelarEdicao = () => { 
+    setIdEditando(null); setNomeForm(""); setPrecoForm(""); setPrecoCustoForm(""); setCategoriaForm(""); setEstoqueForm(""); setEstoqueMinimoForm(""); 
+  }
+
+  // ATUALIZADO: EXCLUIR PRODUTO COM MODAL PERSONALIZADO
+  const excluirProduto = (id: number, nome: string) => {
+    if (userRole !== "gerente") return;
+    
+    mostrarConfirmacao(
+      "Excluir Produto", 
+      `Tem certeza que deseja excluir o produto "${nome}"?\nEssa ação não poderá ser desfeita.`, 
+      async () => {
+        const { error } = await supabase.from('Produtos').delete().eq('id', id);
+        if (!error) {
+          setProdutos(prev => prev.filter(p => p.id !== id));
+          setAlerta(null); // Fecha o alerta se deu certo
+        } else {
+          mostrarAlerta("Erro ao Excluir", error.message, "erro");
+        }
+      }
+    );
   }
 
   /* --- TELAS --- */
@@ -390,6 +441,22 @@ export default function App() {
             <Button type="submit" disabled={carregandoLogin} className="w-full h-12 bg-orange-500 hover:bg-orange-600 text-white font-bold text-base rounded-xl mt-4 transition-colors">{carregandoLogin ? "A autenticar..." : "Entrar no Sistema"}</Button>
           </form>
         </div>
+
+        {/* ALERTA RENDERIZADO NO LOGIN TAMBÉM */}
+        {alerta && alerta.visivel && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 transition-all">
+            <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl p-6 w-full max-w-sm flex flex-col items-center text-center animate-in zoom-in-95 duration-200 border border-slate-200 dark:border-slate-800">
+              <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 shadow-inner ${alerta.tipo === 'erro' ? 'bg-red-100 dark:bg-red-900/30' : 'bg-amber-100 dark:bg-amber-900/30'}`}>
+                <span className="text-3xl">{alerta.tipo === 'erro' ? '❌' : '⚠️'}</span>
+              </div>
+              <h3 className="text-xl font-black text-slate-800 dark:text-slate-100 mb-2">{alerta.titulo}</h3>
+              <p className="text-slate-500 dark:text-slate-400 text-sm mb-8 whitespace-pre-line">{alerta.mensagem}</p>
+              <Button onClick={() => setAlerta(null)} className={`w-full h-12 text-white font-bold text-lg rounded-xl transition-colors ${alerta.tipo === 'erro' ? 'bg-red-500 hover:bg-red-600' : 'bg-amber-500 hover:bg-amber-600'}`}>
+                OK, entendi
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -397,24 +464,12 @@ export default function App() {
   return (
     <div className="flex flex-col h-[100dvh] bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans overflow-hidden transition-colors" onClick={() => { setMostrarResultados(false); setMostrarClientes(false); setMostrarCategorias(false); setMostrarResultadosPainel(false); }}>
       
-      <header className={`px-4 py-3 flex justify-between items-center shadow-md z-20 transition-colors ${abaAtual === 'pdv' ? 'bg-orange-500 dark:bg-orange-600' : 'bg-slate-800 dark:bg-slate-900'}`}>
-        <div className="flex flex-col text-left">
-          <h1 className="text-base font-bold text-white leading-none">{abaAtual === 'pdv' ? 'PDV Mobile' : abaAtual === 'estoque' ? 'Gestão de Estoque' : 'Painel de Controle'}</h1>
-          <span className="text-[10px] text-orange-50 mt-1 truncate max-w-[180px]">{userEmail}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-full ${abaAtual === 'pdv' ? 'text-orange-100 bg-orange-700/50' : 'text-slate-100 bg-slate-700'}`}>{userRole}</span>
-          <button onClick={() => setTemaEscuro(!temaEscuro)} className="p-1.5 rounded-lg text-sm bg-black/10 hover:bg-black/20 text-white transition-colors">{temaEscuro ? '☀️' : '🌙'}</button>
-          <button onClick={lidarComLogout} className="text-white bg-red-700/50 hover:bg-red-700/70 p-1.5 rounded-lg text-xs font-bold transition-colors">Sair</button>
-        </div>
-      </header>
-
       <main className="flex-1 overflow-y-auto relative">
         
         {/* TELA 1: PDV */}
         {abaAtual === 'pdv' && (
           <div className="flex flex-col h-full">
-            <div className="bg-white dark:bg-slate-900 p-3 shadow-sm z-20 relative border-b dark:border-slate-800 transition-colors" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-white dark:bg-slate-900 p-4 pt-6 shadow-sm z-20 relative border-b dark:border-slate-800 transition-colors" onClick={(e) => e.stopPropagation()}>
               <Input type="text" placeholder="Código ou nome..." value={busca} onChange={(e) => setBusca(e.target.value)} onFocus={() => setMostrarResultados(true)} className="h-12 text-base bg-slate-50 dark:bg-slate-950 dark:text-white dark:border-slate-800" />
               {mostrarResultados && (
                 <div className="absolute top-full mt-1 left-3 right-3 bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-slate-200 dark:border-slate-700 max-h-60 overflow-y-auto z-30 text-left transition-colors">
@@ -423,12 +478,15 @@ export default function App() {
                   ) : (
                     produtosFiltrados.map(produto => {
                       const semEstoque = produto.estoque <= 0;
+                      const limiteMinimo = produto.estoque_minimo !== undefined && produto.estoque_minimo !== null ? produto.estoque_minimo : 10;
+                      const emAlerta = produto.estoque <= limiteMinimo;
+
                       return (
                         <div key={produto.id} onClick={() => !semEstoque && adicionarAoCarrinho(produto)} className={`p-3 border-b dark:border-slate-700 active:bg-slate-100 dark:active:bg-slate-700 flex justify-between items-center text-left transition-colors ${semEstoque ? 'opacity-50 cursor-not-allowed bg-slate-50 dark:bg-slate-900/50' : 'cursor-pointer'}`}>
                           <div className="flex flex-col flex-1 min-w-0 pr-2 text-left">
                             <span className="font-semibold text-slate-800 dark:text-slate-100 break-words">{produto.nome}</span>
                             <span className="text-[10px] text-slate-400 dark:text-slate-500 flex items-center gap-2 mt-0.5">
-                                <span className={`font-bold ${produto.estoque <= 30 ? 'text-red-500' : 'text-emerald-500'}`}>Estoque: {produto.estoque} {produto.estoque <= 30 && '⚠️'}</span>
+                                <span className={`font-bold ${emAlerta ? 'text-red-500' : 'text-emerald-500'}`}>{produto.estoque} UN</span>
                                 • {produto.categoria}
                             </span>
                           </div>
@@ -449,18 +507,43 @@ export default function App() {
               ) : (
                 carrinho.map(item => (
                   <div key={item.produto.id} className="bg-white dark:bg-slate-900 p-3 rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 flex flex-col gap-3 text-left transition-colors">
-                    <div className="flex justify-between items-start w-full gap-2">
-                      <span className="font-bold text-slate-700 dark:text-slate-200 flex-1 pr-2 break-words">{item.produto.nome}</span>
-                      <span className="font-bold text-slate-900 dark:text-slate-100 whitespace-nowrap">R$ {(item.produto.preco * (Number(item.quantidade) || 0)).toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between items-center w-full">
-                      <span className="text-xs text-slate-400 dark:text-slate-500">R$ {item.produto.preco.toFixed(2)} / un</span>
-                      <div className="flex items-center border dark:border-slate-700 rounded-lg overflow-hidden bg-slate-50 dark:bg-slate-800 transition-colors">
-                        <button onClick={() => alterarQuantidade(item.produto.id, Number(item.quantidade) - 1)} className="w-10 h-10 border-r dark:border-slate-700 text-lg dark:text-white hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">{'-'}</button>
-                        <input type="number" value={item.quantidade} onChange={(e) => alterarQuantidade(item.produto.id, e.target.value)} onBlur={() => validarQuantidadeFinal(item.produto.id)} className="w-14 h-10 text-center font-bold bg-transparent dark:text-white" />
-                        <button onClick={() => alterarQuantidade(item.produto.id, Number(item.quantidade) + 1)} className="w-10 h-10 border-l dark:border-slate-700 text-lg dark:text-white hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">+</button>
+
+                    {/* PARTE DE CIMA: Nome do Produto alinhado com Preço e o X */}
+                    <div className="flex justify-between items-center w-full gap-2">
+                      <span className="font-bold text-slate-700 dark:text-slate-200 flex-1 truncate">
+                        {item.produto.nome}
+                      </span>
+
+                      <div className="flex items-center gap-3 shrink-0">
+                        <span className="font-bold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                          R$ {(item.produto.preco * (Number(item.quantidade) || 0)).toFixed(2)}
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={() => alterarQuantidade(item.produto.id, 0)}
+                          className="flex items-center justify-center h-8 w-8 text-slate-400 hover:text-red-500 bg-transparent border-0 rounded-md transition-colors"
+                          title="Remover"
+                        >
+                          <X className="h-5 w-5" />
+                        </button>
                       </div>
                     </div>
+
+                    {/* PARTE DE BAIXO: Preço unitário, Estoque e Botões de quantidade */}
+                    <div className="flex justify-between items-end w-full">
+                      <div className="flex flex-col">
+                        <span className="text-xs text-slate-400 dark:text-slate-500">R$ {item.produto.preco.toFixed(2)} / un</span>
+                        <span className="text-[10px] font-bold text-orange-500 dark:text-orange-400 mt-1">Estoque disp: {item.produto.estoque}</span>
+                      </div>
+
+                      <div className="flex items-center border dark:border-slate-700 rounded-lg overflow-hidden bg-slate-50 dark:bg-slate-800 transition-colors">
+                        <button type="button" onClick={() => alterarQuantidade(item.produto.id, Number(item.quantidade) - 1)} className="w-10 h-10 border-r dark:border-slate-700 text-lg dark:text-white hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">-</button>
+                        <input type="number" value={item.quantidade} onChange={(e) => alterarQuantidade(item.produto.id, e.target.value)} onBlur={() => validarQuantidadeFinal(item.produto.id)} className="w-14 h-10 text-center font-bold bg-transparent dark:text-white" />
+                        <button type="button" onClick={() => alterarQuantidade(item.produto.id, Number(item.quantidade) + 1)} className="w-10 h-10 border-l dark:border-slate-700 text-lg dark:text-white hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">+</button>
+                      </div>
+                    </div>
+
                   </div>
                 ))
               )}
@@ -497,38 +580,46 @@ export default function App() {
 
         {/* TELA 2: ESTOQUE */}
         {abaAtual === 'estoque' && userRole === 'gerente' && (
-          <div className="p-4 h-full bg-slate-50 dark:bg-slate-950 overflow-y-auto pb-24 text-left transition-colors" onClick={(e) => e.stopPropagation()}>
+          <div className="p-4 pt-6 h-full bg-slate-50 dark:bg-slate-950 overflow-y-auto pb-24 text-left transition-colors" onClick={(e) => e.stopPropagation()}>
             <div className={`bg-white dark:bg-slate-900 p-5 rounded-2xl shadow-sm border transition-colors text-left ${idEditando ? 'border-amber-400 dark:border-amber-500 ring-4 ring-amber-50 dark:ring-amber-900/30' : 'border-slate-200 dark:border-slate-800'}`}>
               <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100 mb-4 text-left">{idEditando ? '✏️ Editando Produto' : '📦 Novo Produto'}</h2>
               <form onSubmit={salvarProduto} className="space-y-4 text-left">
+                
+                <div className="text-left relative">
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 text-left">Categoria</label>
+                  <Input placeholder="Ex: Cervejas" value={categoriaForm} onChange={(e) => { setCategoriaForm(e.target.value); setMostrarCategorias(true) }} onFocus={() => setMostrarCategorias(true)} className="h-12 bg-slate-50 dark:bg-slate-950 dark:border-slate-800 dark:text-white" />
+                  {mostrarCategorias && (
+                    <div className="absolute top-full mt-1 left-0 right-0 bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-slate-200 dark:border-slate-700 max-h-44 overflow-y-auto z-30 text-left transition-colors">
+                      {categoriasFiltradas.length === 0 ? (
+                        <div className="p-3 text-center text-slate-400 dark:text-slate-500 text-xs italic">"{categoriaForm}" é uma categoria nova!</div>
+                      ) : (
+                        categoriasFiltradas.map(cat => (
+                          <div key={cat} onClick={() => { setCategoriaForm(cat); setMostrarCategorias(false) }} className="p-3 border-b dark:border-slate-700 last:border-b-0 active:bg-slate-100 dark:active:bg-slate-700 flex justify-between items-center cursor-pointer transition-colors">
+                            <span className="font-semibold text-slate-700 dark:text-slate-200 text-sm">{cat}</span>
+                            <span className="text-[9px] bg-slate-100 dark:bg-slate-900 text-slate-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Salva</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 <div>
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Nome da Bebida</label>
                   <Input placeholder="Ex: Suco de Laranja 1L" value={nomeForm} onChange={(e) => setNomeForm(e.target.value)} className="h-12 bg-slate-50 dark:bg-slate-950 dark:border-slate-800 dark:text-white" required />
                 </div>
+                
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="text-left relative">
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 text-left">Categoria</label>
-                    <Input placeholder="Ex: Cervejas" value={categoriaForm} onChange={(e) => { setCategoriaForm(e.target.value); setMostrarCategorias(true) }} onFocus={() => setMostrarCategorias(true)} className="h-12 bg-slate-50 dark:bg-slate-950 dark:border-slate-800 dark:text-white" />
-                    {mostrarCategorias && (
-                      <div className="absolute top-full mt-1 left-0 right-0 bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-slate-200 dark:border-slate-700 max-h-44 overflow-y-auto z-30 text-left transition-colors">
-                        {categoriasFiltradas.length === 0 ? (
-                          <div className="p-3 text-center text-slate-400 dark:text-slate-500 text-xs italic">"{categoriaForm}" é uma categoria nova!</div>
-                        ) : (
-                          categoriasFiltradas.map(cat => (
-                            <div key={cat} onClick={() => { setCategoriaForm(cat); setMostrarCategorias(false) }} className="p-3 border-b dark:border-slate-700 last:border-b-0 active:bg-slate-100 dark:active:bg-slate-700 flex justify-between items-center cursor-pointer transition-colors">
-                              <span className="font-semibold text-slate-700 dark:text-slate-200 text-sm">{cat}</span>
-                              <span className="text-[9px] bg-slate-100 dark:bg-slate-900 text-slate-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Salva</span>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    )}
-                  </div>
                   <div>
                     <label className="block text-sm font-bold text-orange-600 dark:text-orange-500 mb-1">Estoque Atual</label>
                     <Input type="number" placeholder="0" value={estoqueForm} onChange={(e) => setEstoqueForm(e.target.value)} className="h-12 font-bold bg-orange-50 dark:bg-orange-950/20 border-orange-200 dark:border-orange-900/50 dark:text-white focus-visible:ring-orange-500" required />
                   </div>
+                  <div>
+                    <label className="block text-sm font-bold text-red-600 dark:text-red-500 mb-1">Estoque Mínimo</label>
+                    <Input type="number" placeholder="Ex: 10" value={estoqueMinimoForm} onChange={(e) => setEstoqueMinimoForm(e.target.value)} className="h-12 font-bold bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-900/50 dark:text-white focus-visible:ring-red-500" required />
+                  </div>
                 </div>
+
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Custo (R$)</label>
@@ -553,27 +644,36 @@ export default function App() {
                 {produtos.length === 0 ? (
                   <p className="text-sm text-slate-400 text-center py-4">Nenhum produto cadastrado.</p>
                 ) : (
-                  produtos.map(produto => (
-                    <div key={produto.id} className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 flex justify-between items-center shadow-sm transition-colors">
-                      <div className="flex flex-col flex-1 min-w-0 pr-2">
-                        <div className="flex items-center gap-2">
+                  produtos.map(produto => {
+                    const limiteMinimo = produto.estoque_minimo !== undefined && produto.estoque_minimo !== null ? produto.estoque_minimo : 10;
+                    const emAlerta = produto.estoque <= limiteMinimo;
+
+                    return (
+                      <div key={produto.id} className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 flex justify-between items-center shadow-sm transition-colors">
+                        
+                        <div className="flex flex-col flex-1 min-w-0 pr-2">
                           <span className="font-bold text-slate-800 dark:text-slate-200 break-words">{produto.nome}</span>
-                          <span className={`text-[10px] px-2 py-0.5 rounded font-black uppercase tracking-wider ${produto.estoque <= 30 ? 'bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400' : 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400'}`}>
-                            {produto.estoque} UN {produto.estoque <= 30 && '⚠️'}
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-1">
+                            <span className="bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded text-[10px] uppercase font-bold">{produto.categoria}</span>
+                            <span className="text-orange-600 dark:text-orange-400 font-semibold">V: R$ {produto.preco.toFixed(2)}</span>
+                            <span className="text-amber-600 dark:text-amber-500 font-semibold border-l dark:border-slate-700 pl-2">C: R$ {produto.preco_custo?.toFixed(2) || '0.00'}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 shrink-0">
+                          <span className={`text-[10px] px-2 py-1 rounded-md font-black uppercase tracking-wider ${emAlerta ? 'bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400' : 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400'}`}>
+                            {produto.estoque} UN {emAlerta && '⚠️'}
                           </span>
+                          
+                          <div className="flex gap-2 border-l dark:border-slate-200 dark:border-slate-700 pl-3">
+                            <button onClick={() => iniciarEdicao(produto)} className="w-8 h-8 flex items-center justify-center bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded-lg transition-colors">✏️</button>
+                            <button onClick={() => excluirProduto(produto.id, produto.nome)} className="w-8 h-8 flex items-center justify-center bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg transition-colors">🗑️</button>
+                          </div>
                         </div>
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-1">
-                          <span className="bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded text-[10px] uppercase font-bold">{produto.categoria}</span>
-                          <span className="text-orange-600 dark:text-orange-400 font-semibold">V: R$ {produto.preco.toFixed(2)}</span>
-                          <span className="text-amber-600 dark:text-amber-500 font-semibold border-l dark:border-slate-700 pl-2">C: R$ {produto.preco_custo?.toFixed(2) || '0.00'}</span>
-                        </div>
+
                       </div>
-                      <div className="flex gap-2 shrink-0">
-                        <button onClick={() => iniciarEdicao(produto)} className="w-8 h-8 flex items-center justify-center bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded-lg transition-colors">✏️</button>
-                        <button onClick={() => excluirProduto(produto.id, produto.nome)} className="w-8 h-8 flex items-center justify-center bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg transition-colors">🗑️</button>
-                      </div>
-                    </div>
-                  ))
+                    )
+                  })
                 )}
               </div>
             </div>
@@ -582,7 +682,7 @@ export default function App() {
 
         {/* TELA 3: PAINEL DE RELATÓRIOS COM FILTROS AVANÇADOS */}
         {abaAtual === 'painel' && userRole === 'gerente' && (
-          <div className="p-4 h-full bg-slate-50 dark:bg-slate-950 overflow-y-auto pb-24 transition-colors">
+          <div className="p-4 pt-6 h-full bg-slate-50 dark:bg-slate-950 overflow-y-auto pb-24 transition-colors">
             
             <div className="flex bg-white dark:bg-slate-900 p-1 rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 mb-3">
               <button onClick={() => setFiltroData('hoje')} className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${filtroData === 'hoje' ? 'bg-orange-500 text-white shadow' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'}`}>Hoje</button>
@@ -686,6 +786,43 @@ export default function App() {
           </div>
         )}
 
+        {/* TELA 4: PERFIL */}
+        {abaAtual === 'perfil' && (
+          <div className="p-4 pt-6 h-full bg-slate-50 dark:bg-slate-950 overflow-y-auto pb-24 transition-colors flex flex-col items-center justify-start">
+            <div className="bg-white dark:bg-slate-900 p-8 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 w-full max-w-sm text-center animate-in fade-in zoom-in-95 duration-200">
+              
+              <div className="w-24 h-24 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 text-4xl shadow-inner border border-slate-200 dark:border-slate-700">
+                🧑‍💼
+              </div>
+              
+              <h2 className="text-xl font-black text-slate-800 dark:text-slate-100 truncate">{userEmail}</h2>
+              
+              <span className="inline-block mt-2 text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">
+                {userRole}
+              </span>
+
+              <div className="w-full h-px bg-slate-100 dark:bg-slate-800 my-6"></div>
+
+              <div className="space-y-3">
+                <Button 
+                  onClick={() => setTemaEscuro(!temaEscuro)} 
+                  className="w-full h-12 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold rounded-xl transition-colors"
+                >
+                  {temaEscuro ? '☀️ Mudar para Modo Claro' : '🌙 Mudar para Modo Escuro'}
+                </Button>
+                
+                <Button 
+                  onClick={lidarComLogout} 
+                  className="w-full h-12 bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400 font-bold rounded-xl transition-colors"
+                >
+                  🚪 Sair da Conta
+                </Button>
+              </div>
+
+            </div>
+          </div>
+        )}
+
       </main>
 
       {/* RODAPÉ */}
@@ -705,16 +842,62 @@ export default function App() {
             </button>
           </>
         )}
+        
+        <div className="w-[1px] bg-slate-100 dark:bg-slate-800 my-2"></div>
+        <button onClick={() => setAbaAtual('perfil')} className={`flex-1 flex flex-col items-center justify-center ${abaAtual === 'perfil' ? 'text-purple-500 dark:text-purple-400' : 'text-slate-400 dark:text-slate-500'}`}>
+          <span className="text-xl mb-1">👤</span><span className="text-[10px] font-bold uppercase tracking-wider">Perfil</span>
+        </button>
       </nav>
 
       {/* MODAL DE SUCESSO DA VENDA */}
       {vendaSucesso && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 transition-all">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl p-6 w-full max-w-sm flex flex-col items-center text-center animate-in zoom-in-95 duration-200 border border-slate-200 dark:border-slate-800">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 transition-all">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl p-6 w-full max-w-sm flex flex-col items-center text-center animate-in zoom-in-95 duration-200 border border-slate-200 dark:border-slate-800">
             <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-900/30 rounded-full flex items-center justify-center mb-4 shadow-inner"><span className="text-3xl">✅</span></div>
             <h3 className="text-xl font-black text-slate-800 dark:text-slate-100 mb-1">Venda Finalizada!</h3><p className="text-slate-500 dark:text-slate-400 text-sm mb-6">O recibo foi registrado no sistema.</p>
             <div className="bg-slate-50 dark:bg-slate-800/50 w-full rounded-xl p-4 mb-6 border border-slate-100 dark:border-slate-700/50"><span className="block text-xs font-bold text-slate-400 dark:text-slate-500 uppercase mb-1">Valor Recebido</span><span className="text-4xl font-black text-orange-500 dark:text-orange-400">R$ {totalVendaSucesso.toFixed(2)}</span></div>
             <Button onClick={() => setVendaSucesso(false)} className="w-full h-12 bg-orange-500 hover:bg-orange-600 text-white font-bold text-lg rounded-xl transition-colors shadow-lg shadow-orange-500/30">Nova Venda</Button>
+          </div>
+        </div>
+      )}
+
+      {/* NOVO MODAL DE ALERTA E CONFIRMAÇÃO (RENDERIZADO SOBRE TUDO) */}
+      {alerta && alerta.visivel && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 transition-all">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl p-6 w-full max-w-sm flex flex-col items-center text-center animate-in zoom-in-95 duration-200 border border-slate-200 dark:border-slate-800">
+            
+            <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 shadow-inner ${
+              alerta.tipo === 'erro' ? 'bg-red-100 dark:bg-red-900/30' : 
+              alerta.tipo === 'sucesso' ? 'bg-emerald-100 dark:bg-emerald-900/30' : 
+              'bg-amber-100 dark:bg-amber-900/30'
+            }`}>
+              <span className="text-3xl">
+                {alerta.tipo === 'erro' ? '❌' : alerta.tipo === 'sucesso' ? '✅' : '⚠️'}
+              </span>
+            </div>
+            
+            <h3 className="text-xl font-black text-slate-800 dark:text-slate-100 mb-2">{alerta.titulo}</h3>
+            <p className="text-slate-500 dark:text-slate-400 text-sm mb-8 whitespace-pre-line">{alerta.mensagem}</p>
+            
+            {alerta.isConfirm ? (
+              <div className="flex gap-3 w-full">
+                <Button onClick={() => setAlerta(null)} className="flex-1 h-12 bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold rounded-xl transition-colors">
+                  Cancelar
+                </Button>
+                <Button onClick={alerta.onConfirm} className="flex-1 h-12 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl transition-colors">
+                  Confirmar
+                </Button>
+              </div>
+            ) : (
+              <Button onClick={() => setAlerta(null)} className={`w-full h-12 text-white font-bold text-lg rounded-xl transition-colors ${
+                alerta.tipo === 'erro' ? 'bg-red-500 hover:bg-red-600' : 
+                alerta.tipo === 'sucesso' ? 'bg-emerald-500 hover:bg-emerald-600' : 
+                'bg-amber-500 hover:bg-amber-600'
+              }`}>
+                OK, entendi
+              </Button>
+            )}
+
           </div>
         </div>
       )}
