@@ -2,7 +2,8 @@ import { useState, useEffect } from "react"
 import { supabase } from "@/lib/supabase"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { X } from "lucide-react"
+import { X, ScanBarcode } from "lucide-react"
+import { Html5Qrcode } from "html5-qrcode"
 
 interface Produto {
   id: number
@@ -44,7 +45,9 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
   const [vendaSucesso, setVendaSucesso] = useState(false)
   const [totalVendaSucesso, setTotalVendaSucesso] = useState(0)
 
-  // Busca os dados iniciais ao montar a tela
+  // Estado do Leitor de Código de Barras
+  const [lendoCodigo, setLendoCodigo] = useState(false)
+
   useEffect(() => {
     async function buscarDados() {
       setCarregandoDados(true)
@@ -62,12 +65,69 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
     buscarDados()
   }, [])
 
+  // EFEITO DO LEITOR DE CÓDIGO DE BARRAS (CÂMERA)
+  useEffect(() => {
+    let html5QrCode: Html5Qrcode | null = null;
+    let isMounted = true;
+
+    if (lendoCodigo) {
+      // Timeout para garantir que a Div do leitor foi renderizada na tela
+      setTimeout(() => {
+        if (!isMounted) return;
+        html5QrCode = new Html5Qrcode("leitor-camera");
+        
+        html5QrCode.start(
+          { facingMode: "environment" }, // Usa a câmera traseira
+          { fps: 10, qrbox: { width: 300, height: 150 } }, // Formato retangular para código de barras
+          (codigoDecodificado) => {
+            if (html5QrCode && html5QrCode.isScanning) {
+              html5QrCode.stop().then(() => {
+                setLendoCodigo(false);
+                processarCodigoLido(codigoDecodificado);
+              }).catch(console.error);
+            }
+          },
+          (erroLog) => {
+            // Ignora erros de "código não encontrado no frame atual"
+          }
+        ).catch(err => {
+          setLendoCodigo(false);
+          mostrarAlerta("Erro na Câmera", "Não foi possível acessar a câmera. Verifique as permissões do navegador.", "erro");
+        });
+      }, 100);
+    }
+
+    return () => {
+      isMounted = false;
+      if (html5QrCode && html5QrCode.isScanning) {
+        html5QrCode.stop().catch(console.error);
+      }
+    }
+  }, [lendoCodigo])
+
+  // Lógica quando a câmera acha um código
+  const processarCodigoLido = (codigo: string) => {
+    // Por enquanto, o sistema compara o código lido com o 'id' do produto.
+    // Se no futuro você criar uma coluna 'codigo_barras' no banco, basta mudar o '.id.toString()' abaixo.
+    const produtoEncontrado = produtos.find(p => p.id.toString() === codigo);
+
+    if (produtoEncontrado) {
+      if (produtoEncontrado.estoque <= 0) {
+        mostrarAlerta("Produto Esgotado", `O item "${produtoEncontrado.nome}" está sem estoque.`, "erro");
+      } else {
+        adicionarAoCarrinho(produtoEncontrado);
+      }
+    } else {
+      mostrarAlerta("Não encontrado", `O código ${codigo} não está cadastrado no sistema.`, "aviso");
+    }
+  }
+
   const produtosFiltrados = produtos.filter(produto => produto.nome.toLowerCase().includes(busca.toLowerCase()) || produto.id.toString() === busca.toLowerCase())
   const clientesFiltrados = clientes.filter(cliente => cliente.nome.toLowerCase().includes(nomeClientePDV.toLowerCase()))
 
   const adicionarAoCarrinho = (produto: Produto) => {
     if (produto.estoque <= 0) {
-      mostrarAlerta("Produto Esgotado", `O item "${produto.nome}" está sem estoque no momento e não pode ser vendido.`, "erro");
+      mostrarAlerta("Produto Esgotado", `O item "${produto.nome}" está sem estoque.`, "erro");
       return;
     }
 
@@ -75,7 +135,7 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
       const itemExistente = prev.find(item => item.produto.id === produto.id)
       if (itemExistente) {
         if (Number(itemExistente.quantidade) + 1 > produto.estoque) {
-          mostrarAlerta("Estoque Insuficiente", `Temos apenas ${produto.estoque} unidades de "${produto.nome}" disponíveis.`, "aviso");
+          mostrarAlerta("Estoque Insuficiente", `Temos apenas ${produto.estoque} unidades disponíveis.`, "aviso");
           return prev;
         }
         return prev.map(item => item.produto.id === produto.id ? { ...item, quantidade: Number(item.quantidade) + 1 } : item)
@@ -95,7 +155,7 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
         if (qtdNumerica < 0 || isNaN(qtdNumerica)) return item
         
         if (qtdNumerica > item.produto.estoque) {
-           mostrarAlerta("Limite Atingido", `Você não pode adicionar mais do que o estoque disponível (${item.produto.estoque} unidades).`, "aviso");
+           mostrarAlerta("Limite Atingido", `Você não pode adicionar mais do que o estoque disponível.`, "aviso");
            return { ...item, quantidade: item.produto.estoque }
         }
         return { ...item, quantidade: qtdNumerica }
@@ -128,12 +188,10 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
         }
       }
 
-      // Salva a Venda Geral
       const { data: vendaData, error: vendaError } = await supabase.from('Vendas').insert([{ total: totalVenda, vendedor_email: userEmail, cliente_id: clienteIdFinal }]).select()
       if (vendaError) throw vendaError
       const idDaVenda = vendaData[0].id
 
-      // Prepara e Salva Itens da Venda
       const itensParaSalvar = carrinho.map(item => ({
         venda_id: idDaVenda, produto_id: item.produto.id, nome_produto: item.produto.nome,
         quantidade: Number(item.quantidade), preco_venda: item.produto.preco, preco_custo: item.produto.preco_custo || 0
@@ -141,19 +199,17 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
       const { error: itensError } = await supabase.from('Itens_Venda').insert(itensParaSalvar)
       if (itensError) throw itensError
 
-      // Desconta o Estoque
       for (const item of carrinho) {
         const novoEstoque = (item.produto.estoque || 0) - Number(item.quantidade);
         const { data: checkData, error: erroEstoque } = await supabase.from('Produtos').update({ estoque: novoEstoque }).eq('id', item.produto.id).select();
 
         if (erroEstoque) {
-          mostrarAlerta("Erro de Banco de Dados", `Falha ao dar baixa no estoque de ${item.produto.nome}.\n\nDetalhe: ${erroEstoque.message}`, "erro");
+          mostrarAlerta("Erro de Banco", `Falha ao dar baixa no estoque: ${erroEstoque.message}`, "erro");
         } else if (!checkData || checkData.length === 0) {
-          mostrarAlerta("Acesso Negado (RLS)", `O estoque de ${item.produto.nome} não pôde ser atualizado.`, "erro");
+          mostrarAlerta("Acesso Negado", `O estoque de ${item.produto.nome} não pôde ser atualizado.`, "erro");
         }
       }
 
-      // Atualiza o estoque localmente
       setProdutos(prev => prev.map(p => {
         const itemVendido = carrinho.find(c => c.produto.id === p.id);
         if (itemVendido) return { ...p, estoque: (p.estoque || 0) - Number(itemVendido.quantidade) };
@@ -175,9 +231,40 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
   return (
     <div className="flex flex-col h-full w-full relative text-left" onClick={() => { setMostrarResultados(false); setMostrarClientes(false); }}>
       
-      {/* CAMPO DE BUSCA */}
+      {/* CÂMERA DO LEITOR OVERLAY */}
+      {lendoCodigo && (
+        <div className="fixed inset-0 z-[200] bg-black/95 flex flex-col justify-center items-center animate-in fade-in duration-200">
+          <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center bg-gradient-to-b from-black/80 to-transparent z-10">
+            <span className="text-white font-bold tracking-wider uppercase text-sm">Escaneando Produto</span>
+            <Button variant="ghost" size="icon" onClick={() => setLendoCodigo(false)} className="text-white hover:bg-white/20 rounded-full h-10 w-10">
+              <X className="h-6 w-6" />
+            </Button>
+          </div>
+          
+          <div className="w-full max-w-md overflow-hidden rounded-2xl relative shadow-[0_0_50px_rgba(249,115,22,0.3)] border border-orange-500/30">
+             {/* A div onde o html5-qrcode vai injetar o vídeo da câmera */}
+             <div id="leitor-camera" className="w-full h-full bg-slate-900 min-h-[300px]"></div>
+             
+             {/* Mira visual */}
+             <div className="absolute inset-0 border-[3px] border-orange-500/50 m-8 rounded-xl pointer-events-none">
+                <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-orange-500 shadow-[0_0_10px_rgba(249,115,22,1)] opacity-70 animate-pulse"></div>
+             </div>
+          </div>
+          <p className="text-white/60 text-xs mt-8 text-center px-6">Aponte a câmera para o código de barras do produto.</p>
+        </div>
+      )}
+
+      {/* CAMPO DE BUSCA COM ÍCONE DO LEITOR */}
       <div className="bg-white dark:bg-slate-900 p-4 pt-6 shadow-sm z-20 relative border-b dark:border-slate-800 transition-colors" onClick={(e) => e.stopPropagation()}>
-        <Input type="text" placeholder="Código ou nome..." value={busca} onChange={(e) => setBusca(e.target.value)} onFocus={() => setMostrarResultados(true)} className="h-12 text-base bg-slate-50 dark:bg-slate-950 dark:text-white dark:border-slate-800" />
+        <div className="relative flex items-center w-full">
+          <Input type="text" placeholder="Código ou nome..." value={busca} onChange={(e) => setBusca(e.target.value)} onFocus={() => setMostrarResultados(true)} className="h-12 text-base pr-12 bg-slate-50 dark:bg-slate-950 dark:text-white dark:border-slate-800 w-full" />
+          
+          {/* BOTÃO DO LEITOR DE CÓDIGO DE BARRAS */}
+          <Button type="button" onClick={() => setLendoCodigo(true)} variant="ghost" className="absolute right-1 h-10 w-10 text-slate-400 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-900/20 p-0 rounded-lg">
+            <ScanBarcode className="h-6 w-6" />
+          </Button>
+        </div>
+
         {mostrarResultados && (
           <div className="absolute top-full mt-1 left-3 right-3 bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-slate-200 dark:border-slate-700 max-h-60 overflow-y-auto z-30 transition-colors">
             {produtosFiltrados.length === 0 ? (
@@ -215,19 +302,13 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
         ) : (
           carrinho.map(item => (
             <div key={item.produto.id} className="bg-white dark:bg-slate-900 p-3 rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 flex flex-col gap-3 transition-colors">
-              
               <div className="flex justify-between items-center w-full gap-2">
                 <span className="font-bold text-slate-700 dark:text-slate-200 flex-1 truncate">{item.produto.nome}</span>
                 <div className="flex items-center gap-3 shrink-0">
-                  <span className="font-bold text-slate-900 dark:text-slate-100 whitespace-nowrap">
-                    R$ {(item.produto.preco * (Number(item.quantidade) || 0)).toFixed(2)}
-                  </span>
-                  <button type="button" onClick={() => alterarQuantidade(item.produto.id, 0)} className="flex items-center justify-center h-8 w-8 text-slate-400 hover:text-red-500 bg-transparent border-0 rounded-md transition-colors" title="Remover">
-                    <X className="h-5 w-5" />
-                  </button>
+                  <span className="font-bold text-slate-900 dark:text-slate-100 whitespace-nowrap">R$ {(item.produto.preco * (Number(item.quantidade) || 0)).toFixed(2)}</span>
+                  <button type="button" onClick={() => alterarQuantidade(item.produto.id, 0)} className="flex items-center justify-center h-8 w-8 text-slate-400 hover:text-red-500 bg-transparent border-0 rounded-md transition-colors"><X className="h-5 w-5" /></button>
                 </div>
               </div>
-              
               <div className="flex justify-between items-end w-full">
                 <div className="flex flex-col">
                   <span className="text-xs text-slate-400 dark:text-slate-500">R$ {item.produto.preco.toFixed(2)} / un</span>
@@ -244,7 +325,7 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
         )}
       </div>
 
-      {/* ÁREA INFERIOR (CLIENTE E FINALIZAR) */}
+      {/* ÁREA INFERIOR */}
       <div className="absolute bottom-0 left-0 right-0 bg-white dark:bg-slate-900 p-4 border-t dark:border-slate-800 shadow-[0_-4px_10px_-5px_rgba(0,0,0,0.1)] z-20 transition-colors" onClick={(e) => e.stopPropagation()}>
         <div className="mb-3 relative">
           <Input placeholder="Nome do Cliente (Opcional)" value={nomeClientePDV} onChange={(e) => { setNomeClientePDV(e.target.value); setMostrarClientes(true) }} onFocus={() => setMostrarClientes(true)} className="h-10 bg-slate-50 dark:bg-slate-950 dark:text-white dark:border-slate-800" />
@@ -254,10 +335,7 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
                 <div className="p-3 text-center text-slate-400 dark:text-slate-500 text-xs italic">"{nomeClientePDV}" não encontrado. Será cadastrado!</div>
               ) : (
                 clientesFiltrados.map(cli => (
-                  <div key={cli.id} onClick={() => { setNomeClientePDV(cli.nome); setMostrarClientes(false) }} className="p-3 border-b dark:border-slate-700 last:border-b-0 active:bg-slate-100 dark:active:bg-slate-700 flex justify-between items-center cursor-pointer transition-colors">
-                    <span className="font-semibold text-slate-700 dark:text-slate-200 text-sm">{cli.nome}</span>
-                    <span className="text-[9px] bg-slate-100 dark:bg-slate-900 text-slate-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Registrado</span>
-                  </div>
+                  <div key={cli.id} onClick={() => { setNomeClientePDV(cli.nome); setMostrarClientes(false) }} className="p-3 border-b dark:border-slate-700 last:border-b-0 active:bg-slate-100 dark:active:bg-slate-700 flex justify-between items-center cursor-pointer transition-colors"><span className="font-semibold text-slate-700 dark:text-slate-200 text-sm">{cli.nome}</span><span className="text-[9px] bg-slate-100 dark:bg-slate-900 text-slate-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Registrado</span></div>
                 ))
               )}
             </div>
@@ -267,12 +345,10 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
           <span className="font-semibold text-slate-500 dark:text-slate-400">Total a Pagar</span>
           <span className="text-2xl font-black text-orange-500 dark:text-orange-400">R$ {totalVenda.toFixed(2)}</span>
         </div>
-        <Button className="w-full h-12 bg-orange-500 hover:bg-orange-600 text-white font-bold text-lg rounded-xl transition-colors" disabled={carrinho.length === 0 || salvandoVenda} onClick={finalizarVenda}>
-          {salvandoVenda ? "Registrando..." : "Finalizar Venda"}
-        </Button>
+        <Button className="w-full h-12 bg-orange-500 hover:bg-orange-600 text-white font-bold text-lg rounded-xl transition-colors" disabled={carrinho.length === 0 || salvandoVenda} onClick={finalizarVenda}>{salvandoVenda ? "Registrando..." : "Finalizar Venda"}</Button>
       </div>
 
-      {/* MODAL DE SUCESSO DA VENDA */}
+      {/* MODAL SUCESSO */}
       {vendaSucesso && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 transition-all">
           <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl p-6 w-full max-w-sm flex flex-col items-center text-center animate-in zoom-in-95 duration-200 border border-slate-200 dark:border-slate-800">
