@@ -13,6 +13,7 @@ interface Produto {
   categoria: string
   estoque: number
   estoque_minimo: number
+  codigo_barras?: string // <-- Adicionado aqui
 }
 
 interface ItemCarrinho {
@@ -71,14 +72,13 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
     let isMounted = true;
 
     if (lendoCodigo) {
-      // Timeout para garantir que a Div do leitor foi renderizada na tela
       setTimeout(() => {
         if (!isMounted) return;
         html5QrCode = new Html5Qrcode("leitor-camera");
         
         html5QrCode.start(
-          { facingMode: "environment" }, // Usa a câmera traseira
-          { fps: 10, qrbox: { width: 300, height: 150 } }, // Formato retangular para código de barras
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 300, height: 150 } },
           (codigoDecodificado) => {
             if (html5QrCode && html5QrCode.isScanning) {
               html5QrCode.stop().then(() => {
@@ -87,12 +87,12 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
               }).catch(console.error);
             }
           },
-          (erroLog) => {
-            // Ignora erros de "código não encontrado no frame atual"
+          () => {
+            // Ignora erros contínuos enquanto busca o código
           }
-        ).catch(err => {
+        ).catch(() => {  // <-- Removido o 'err' daqui
           setLendoCodigo(false);
-          mostrarAlerta("Erro na Câmera", "Não foi possível acessar a câmera. Verifique as permissões do navegador.", "erro");
+          mostrarAlerta("Erro na Câmera", "Não foi possível acessar a câmera. Verifique as permissões.", "erro");
         });
       }, 100);
     }
@@ -105,11 +105,9 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
     }
   }, [lendoCodigo])
 
-  // Lógica quando a câmera acha um código
+  // Lógica corrigida: Procura pelo código de barras OU pelo ID
   const processarCodigoLido = (codigo: string) => {
-    // Por enquanto, o sistema compara o código lido com o 'id' do produto.
-    // Se no futuro você criar uma coluna 'codigo_barras' no banco, basta mudar o '.id.toString()' abaixo.
-    const produtoEncontrado = produtos.find(p => p.id.toString() === codigo);
+    const produtoEncontrado = produtos.find(p => p.codigo_barras === codigo || p.id.toString() === codigo);
 
     if (produtoEncontrado) {
       if (produtoEncontrado.estoque <= 0) {
@@ -122,7 +120,13 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
     }
   }
 
-  const produtosFiltrados = produtos.filter(produto => produto.nome.toLowerCase().includes(busca.toLowerCase()) || produto.id.toString() === busca.toLowerCase())
+  // A busca manual (texto) também acha pelo código de barras agora
+  const produtosFiltrados = produtos.filter(produto => 
+    produto.nome.toLowerCase().includes(busca.toLowerCase()) || 
+    produto.id.toString() === busca.toLowerCase() ||
+    (produto.codigo_barras && produto.codigo_barras.includes(busca))
+  )
+  
   const clientesFiltrados = clientes.filter(cliente => cliente.nome.toLowerCase().includes(nomeClientePDV.toLowerCase()))
 
   const adicionarAoCarrinho = (produto: Produto) => {
@@ -236,16 +240,13 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
         <div className="fixed inset-0 z-[200] bg-black/95 flex flex-col justify-center items-center animate-in fade-in duration-200">
           <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center bg-gradient-to-b from-black/80 to-transparent z-10">
             <span className="text-white font-bold tracking-wider uppercase text-sm">Escaneando Produto</span>
-            <Button variant="ghost" size="icon" onClick={() => setLendoCodigo(false)} className="text-white hover:bg-white/20 rounded-full h-10 w-10">
+            <button type="button" onClick={() => setLendoCodigo(false)} className="flex items-center justify-center text-white hover:bg-white/20 rounded-full h-10 w-10 transition-colors">
               <X className="h-6 w-6" />
-            </Button>
+            </button>
           </div>
           
           <div className="w-full max-w-md overflow-hidden rounded-2xl relative shadow-[0_0_50px_rgba(249,115,22,0.3)] border border-orange-500/30">
-             {/* A div onde o html5-qrcode vai injetar o vídeo da câmera */}
              <div id="leitor-camera" className="w-full h-full bg-slate-900 min-h-[300px]"></div>
-             
-             {/* Mira visual */}
              <div className="absolute inset-0 border-[3px] border-orange-500/50 m-8 rounded-xl pointer-events-none">
                 <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-orange-500 shadow-[0_0_10px_rgba(249,115,22,1)] opacity-70 animate-pulse"></div>
              </div>
@@ -257,12 +258,10 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
       {/* CAMPO DE BUSCA COM ÍCONE DO LEITOR */}
       <div className="bg-white dark:bg-slate-900 p-4 pt-6 shadow-sm z-20 relative border-b dark:border-slate-800 transition-colors" onClick={(e) => e.stopPropagation()}>
         <div className="relative flex items-center w-full">
-          <Input type="text" placeholder="Código ou nome..." value={busca} onChange={(e) => setBusca(e.target.value)} onFocus={() => setMostrarResultados(true)} className="h-12 text-base pr-12 bg-slate-50 dark:bg-slate-950 dark:text-white dark:border-slate-800 w-full" />
-          
-          {/* BOTÃO DO LEITOR DE CÓDIGO DE BARRAS */}
-          <Button type="button" onClick={() => setLendoCodigo(true)} variant="ghost" className="absolute right-1 h-10 w-10 text-slate-400 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-900/20 p-0 rounded-lg">
+          <Input type="text" placeholder="Código, barras ou nome..." value={busca} onChange={(e) => setBusca(e.target.value)} onFocus={() => setMostrarResultados(true)} className="h-12 text-base pr-12 bg-slate-50 dark:bg-slate-950 dark:text-white dark:border-slate-800 w-full" />
+          <button type="button" onClick={() => setLendoCodigo(true)} className="absolute right-1 h-10 w-10 flex items-center justify-center text-slate-400 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-900/20 rounded-lg transition-colors">
             <ScanBarcode className="h-6 w-6" />
-          </Button>
+          </button>
         </div>
 
         {mostrarResultados && (
