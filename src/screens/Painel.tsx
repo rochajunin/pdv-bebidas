@@ -10,11 +10,19 @@ export default function Painel() {
   const [triggerFiltro, setTriggerFiltro] = useState(0)
   
   const [formFiltros, setFormFiltros] = useState({ dataInicial: "", dataFinal: "", clienteId: "", valorMin: "", valorMax: "", produtoId: "" })
-  const [dadosRelatorio, setDadosRelatorio] = useState({ faturamento: 0, lucro: 0, qtdVendas: 0, ticketMedio: 0, margem: 0, topProdutos: [] as any[] })
+  const [dadosRelatorio, setDadosRelatorio] = useState({ 
+    faturamento: 0, 
+    lucro: 0, 
+    qtdVendas: 0, 
+    ticketMedio: 0, 
+    margem: 0, 
+    topProdutos: [] as any[],
+    historico: [] as any[] // <-- Novo estado para o histórico
+  })
   
   const [clientes, setClientes] = useState<{id: string, nome: string}[]>([])
 
-  // Busca os clientes só pro dropdown do filtro
+  // Busca os clientes só pro dropdown do filtro e para cruzar o nome no histórico
   useEffect(() => {
     supabase.from('Clientes').select('id, nome').then(({ data }) => { if (data) setClientes(data) })
   }, [])
@@ -55,11 +63,35 @@ export default function Painel() {
         const top = Object.entries(produtosVendidos).map(([nome, d]) => ({ nome, ...d as any })).sort((a, b) => b.quantidade - a.quantidade).slice(0, 5)
         const maxQtd = top.length > 0 ? Math.max(...top.map(p => p.quantidade)) : 1
 
-        setDadosRelatorio({ faturamento: faturamentoTotal, lucro: lucroTotal, qtdVendas: qtdVendasValidas, ticketMedio: qtdVendasValidas > 0 ? faturamentoTotal / qtdVendasValidas : 0, margem: faturamentoTotal > 0 ? (lucroTotal / faturamentoTotal) * 100 : 0, topProdutos: top.map(p => ({...p, maxQtd})) })
+        // PREPARAÇÃO DO HISTÓRICO DE VENDAS
+        const historicoMapeado = vendas?.map(v => {
+          const cliente = clientes.find(c => c.id === v.cliente_id)?.nome || "Cliente Padrão";
+          return {
+            id: v.id,
+            data: new Date(v.created_at),
+            total: Number(v.total),
+            cliente: cliente,
+            qtdItens: v.Itens_Venda?.reduce((acc: number, i: any) => acc + Number(i.quantidade), 0) || 0
+          }
+        }).sort((a, b) => b.data.getTime() - a.data.getTime()) || [];
+
+        // Lógica de Limite: Limita a 15 se for "hoje", senão exibe todas do período
+        const limite = filtroData === "hoje" ? 15 : historicoMapeado.length;
+        const historicoFinal = historicoMapeado.slice(0, limite);
+
+        setDadosRelatorio({ 
+          faturamento: faturamentoTotal, 
+          lucro: lucroTotal, 
+          qtdVendas: qtdVendasValidas, 
+          ticketMedio: qtdVendasValidas > 0 ? faturamentoTotal / qtdVendasValidas : 0, 
+          margem: faturamentoTotal > 0 ? (lucroTotal / faturamentoTotal) * 100 : 0, 
+          topProdutos: top.map(p => ({...p, maxQtd})),
+          historico: historicoFinal // Adicionando o histórico no estado
+        })
       } catch (e) { console.error(e) } finally { setCarregandoRelatorio(false) }
     }
     gerarRelatorio()
-  }, [filtroData, triggerFiltro])
+  }, [filtroData, triggerFiltro, clientes]) // O array de clientes está aqui para cruzar os nomes corretamente
 
   return (
     <div className="p-4 pt-6 h-full bg-slate-50 dark:bg-slate-950 overflow-y-auto pb-24 transition-colors">
@@ -118,6 +150,40 @@ export default function Painel() {
               </div>
             )}
           </div>
+
+          {/* NOVA ÁREA: HISTÓRICO DE VENDAS */}
+          <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800">
+            <div className="flex justify-between items-end mb-4">
+              <h3 className="text-base font-bold">📄 Histórico de Vendas</h3>
+              {filtroData === "hoje" && dadosRelatorio.historico.length === 15 && (
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Top 15</span>
+              )}
+            </div>
+            
+            {dadosRelatorio.historico.length === 0 ? (
+              <p className="text-sm text-slate-400 text-center py-4">Nenhum registro no período.</p>
+            ) : (
+              <div className="space-y-3">
+                {dadosRelatorio.historico.map(venda => (
+                  <div key={venda.id} className="p-3 border border-slate-100 dark:border-slate-800 rounded-xl flex justify-between items-center transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                    <div className="flex flex-col">
+                      <span className="text-sm font-bold text-slate-700 dark:text-slate-200">{venda.cliente}</span>
+                      <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 mt-0.5">
+                        {venda.data.toLocaleDateString('pt-BR')} às {venda.data.toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}
+                      </span>
+                    </div>
+                    <div className="text-right flex flex-col items-end">
+                      <span className="font-black text-orange-500 dark:text-orange-400">R$ {venda.total.toFixed(2)}</span>
+                      <span className="text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-500 px-1.5 py-0.5 rounded font-bold mt-1">
+                        {venda.qtdItens} itens
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          
         </div>
       )}
     </div>
