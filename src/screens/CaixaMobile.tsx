@@ -19,6 +19,7 @@ interface Produto {
 interface ItemCarrinho {
   produto: Produto;
   quantidade: number | string;
+  codigo_lote?: string;
 }
 
 interface Cliente {
@@ -111,34 +112,47 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
 
   // 3. Funções do Carrinho
   const processarCodigoLido = (codigo: string) => {
-    const produtoEncontrado = produtos.find(p => p.codigo_barras === codigo || p.id.toString() === codigo);
+    const produtoEncontrado = produtos.find(p => {
+      if (p.id.toString() === codigo) return true;
+      if (p.codigo_barras) {
+        const listaDeCodigos = p.codigo_barras.split(',').map(c => c.trim());
+        return listaDeCodigos.includes(codigo);
+      }
+      return false;
+    });
+
     if (produtoEncontrado) {
       if (produtoEncontrado.estoque <= 0) {
         mostrarAlerta("Produto Esgotado", `O item "${produtoEncontrado.nome}" está sem estoque.`, "erro");
       } else {
-        adicionarAoCarrinho(produtoEncontrado);
+        // Agora passamos o código exato que a câmera leu!
+        adicionarAoCarrinho(produtoEncontrado, codigo);
       }
     } else {
       mostrarAlerta("Não encontrado", `O código ${codigo} não está cadastrado.`, "aviso");
     }
   }
 
-  const adicionarAoCarrinho = (produto: Produto) => {
+  // Recebe o lote como um parâmetro opcional
+  const adicionarAoCarrinho = (produto: Produto, loteExato?: string) => {
     if (produto.estoque <= 0) { 
       mostrarAlerta("Produto Esgotado", `O item "${produto.nome}" está sem estoque no momento.`, "erro"); 
       return; 
     }
     
     setCarrinho(prev => {
-      const itemExistente = prev.find(item => item.produto.id === produto.id)
+      // Se for um lote específico novo, ou se for uma adição manual pela busca
+      const itemExistente = prev.find(item => item.produto.id === produto.id && item.codigo_lote === loteExato)
+      
       if (itemExistente) {
         if (Number(itemExistente.quantidade) + 1 > produto.estoque) { 
           mostrarAlerta("Estoque Insuficiente", `Temos apenas ${produto.estoque} unidades disponíveis.`, "aviso"); 
           return prev; 
         }
-        return prev.map(item => item.produto.id === produto.id ? { ...item, quantidade: Number(item.quantidade) + 1 } : item)
+        return prev.map(item => (item.produto.id === produto.id && item.codigo_lote === loteExato) ? { ...item, quantidade: Number(item.quantidade) + 1 } : item)
       }
-      return [{ produto, quantidade: 1 }, ...prev]
+      // Salva o lote junto com o produto no carrinho
+      return [{ produto, quantidade: 1, codigo_lote: loteExato }, ...prev]
     })
     setBusca(""); 
     setMostrarResultados(false);
@@ -207,7 +221,8 @@ export default function CaixaMobile({ userEmail, mostrarAlerta }: CaixaMobilePro
         nome_produto: item.produto.nome, 
         quantidade: Number(item.quantidade), 
         preco_venda: item.produto.preco, 
-        preco_custo: item.produto.preco_custo || 0 
+        preco_custo: item.produto.preco_custo || 0,
+        codigo_lote: item.codigo_lote || null
       }))
       
       const { error: itensError } = await supabase.from('Itens_Venda').insert(itensParaSalvar)

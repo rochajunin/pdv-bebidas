@@ -55,7 +55,21 @@ export default function Painel() {
 
         const historicoMapeado = vendas?.map(v => {
           const cliente = clientes.find(c => c.id === v.cliente_id)?.nome || "Cliente Padrão";
-          return { id: v.id, data: new Date(v.created_at), total: Number(v.total), cliente: cliente, qtdItens: v.Itens_Venda?.reduce((acc: number, i: any) => acc + Number(i.quantidade), 0) || 0 }
+          
+          // Pega todos os lotes escaneados nessa venda e junta numa string (ignora os vazios)
+          const lotesDaVenda = v.Itens_Venda
+            ?.map((i: any) => i.codigo_lote)
+            .filter(Boolean)
+            .join(', ') || "";
+
+          return { 
+            id: v.id, 
+            data: new Date(v.created_at), 
+            total: Number(v.total), 
+            cliente: cliente, 
+            qtdItens: v.Itens_Venda?.reduce((acc: number, i: any) => acc + Number(i.quantidade), 0) || 0,
+            lotes: lotesDaVenda // <-- Salva para exibir
+          }
         }).sort((a, b) => b.data.getTime() - a.data.getTime()) || [];
 
         const limite = filtroData === "hoje" ? 15 : historicoMapeado.length;
@@ -138,6 +152,12 @@ export default function Painel() {
                   <div key={venda.id} className="p-3 border border-slate-100 dark:border-slate-800 rounded-xl flex justify-between items-center transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50">
                     <div className="flex flex-col">
                       <span className="text-sm font-bold text-slate-700 dark:text-slate-200">{venda.cliente}</span>
+                      
+                      {/* EXIBE OS LOTES AQUI */}
+                      {venda.lotes && (
+                        <span className="text-[10px] font-mono text-orange-500 mt-0.5 font-semibold">Lotes: {venda.lotes}</span>
+                      )}
+
                       <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 mt-0.5">{venda.data.toLocaleDateString('pt-BR')} às {venda.data.toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</span>
                     </div>
                     <div className="text-right flex flex-col items-end">
